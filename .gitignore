@@ -1,0 +1,8 @@
+#basics
+/node_modules
+node_modules
+.env
+.env.*
+
+# debug
+npm-debug.log*
