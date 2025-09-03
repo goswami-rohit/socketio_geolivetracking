@@ -11,6 +11,9 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^5.1.0",
+    "leaflet": "^1.9.4",
+    "radar": "^0.43.1",
+    "radar-sdk-js": "^4.5.5",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1"
   }

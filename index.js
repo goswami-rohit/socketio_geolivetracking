@@ -1,28 +1,58 @@
+// index.js (Main Express Server)
+require('dotenv').config();
 const express = require('express');
-const http = require('http');
+const { createServer } = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const { processRadarWebhook } = require('./radar');
 
 const app = express();
-// Use the port provided by the environment, or default to 3001
-const port = process.env.PORT || 3001;
+const httpServer = createServer(app);
 
-// Enable CORS for all routes and origins
-app.use(cors());
+// Configure CORS for both Express and Socket.IO
+const corsOptions = {
+  origin: [
+    process.env.NEXT_PUBLIC_APP_URL,
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://localhost:8000",
+    "http://13.201.132.230", // AWS EC2 IPV4 port
+    "https://salesmancms-dashboard.onrender.com",
+    "https://telesalesside.onrender.com",
+    "https://socketio-geolivetracking.onrender.com"
+  ],
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+};
 
-// Create a standard HTTP server
-const server = http.createServer(app);
+app.use(cors(corsOptions));
+app.use(express.json()); // For parsing application/json payloads
 
-// Initialize Socket.IO with the HTTP server
-const io = new Server(server, {
-  cors: {
-    origin: [ 
-        "http://localhost:3000", "http://localhost:3001", "http://localhost:8000",
-        "http://13.201.132.230", //aws EC2 IPV4 port
-        "https://salesmancms-dashboard.onrender.com",
-        "https://telesalesside.onrender.com",
-    ],
-    methods: ["GET", "POST"]
+// Setup Socket.IO server
+const io = new Server(httpServer, {
+  cors: corsOptions,
+});
+
+/**
+ * API route to receive real-time location updates via a webhook from Radar.
+ * This endpoint will be configured in your Radar dashboard.
+ */
+app.post('/api/live-location', async (req, res) => {
+  try {
+    // Process and validate the incoming webhook payload using the radar.js file
+    const locationData = await processRadarWebhook(req);
+    if (!locationData) {
+      return res.status(400).send('Invalid webhook signature or data.');
+    }
+
+    // Broadcast the new location to all connected clients via Socket.IO
+    io.emit('locationUpdate', locationData);
+    console.log(`Location updated and broadcasted for userId: ${locationData.userId}`);
+
+    res.status(200).send('Location updated successfully.');
+  } catch (error) {
+    console.error('Error processing live location update:', error);
+    res.status(500).send('Internal Server Error.');
   }
 });
 
@@ -34,25 +64,17 @@ app.get('/', (req, res) => {
     </html>
   `);
 });
+
 // This is where the real-time logic will live
 io.on('connection', (socket) => {
   console.log('A client has connected with ID:', socket.id);
-
-  // This is the event listener for incoming location updates from your webapp
-  socket.on('sendLocationUpdate', (data) => {
-    // You can add validation or database saving here.
-    console.log(`Received location update from user ${data.userId}: ${data.latitude}, ${data.longitude}`);
-    
-    // Broadcast the update to all other connected clients (i.e., your dashboards)
-    io.emit('locationUpdate', data);
-  });
-
   socket.on('disconnect', () => {
     console.log('A client has disconnected');
   });
 });
 
 // Start the server
-server.listen(port, () => {
+const port = process.env.PORT || 3001;
+httpServer.listen(port, () => {
   console.log(`Express and Socket.IO server listening on port ${port}`);
 });
