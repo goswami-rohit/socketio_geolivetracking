@@ -108,9 +108,9 @@ setInterval(async () => {
       try {
         const normalized = liveLocationSchema.parse({
           userId: user.id,
-          salesmanName: `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'N/A',
-          employeeId: user.salesmanLoginId || null,
-          role: user.role || 'executive',
+          salesmanName: `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'N/A',
+          employeeId: user.salesman_login_id || null,
+          role: user.role || 'junior-executive',
           region: user.region || null,
           area: user.area || null,
           latitude: loc.latitude,
