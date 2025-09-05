@@ -72,8 +72,14 @@ const dbPool = new Pool({
 async function fetchActiveSalesmenIds() {
   try {
     const result = await dbPool.query(`
-      SELECT "id", "firstName", "lastName", "role", "region", "area", "salesmanLoginId"
-      FROM "users"
+      SELECT id,
+             first_name,
+             last_name,
+             role,
+             region,
+             area,
+             salesman_login_id
+      FROM users
       WHERE status = 'active'
     `);
     return result.rows;
