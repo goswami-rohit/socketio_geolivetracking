@@ -3,14 +3,34 @@ require('dotenv').config();
 const express = require('express');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
-const { Client } = require('pg');
+const { Pool } = require('pg');
 const cors = require('cors');
 const { pollRadarForLocations } = require('./radar');
+const { z } = require('zod');
 
 const app = express();
 const httpServer = createServer(app);
 
-// Configure CORS for both Express and Socket.IO
+// ----------------- ZOD SCHEMA -----------------
+const liveLocationSchema = z.object({
+  userId: z.number(),
+  salesmanName: z.string(),
+  employeeId: z.string().nullable(),
+  role: z.string(),
+  region: z.string().nullable(),
+  area: z.string().nullable(),
+  latitude: z.number(),
+  longitude: z.number(),
+  recordedAt: z.string(),
+  isActive: z.boolean(),
+  accuracy: z.number().nullable(),
+  speed: z.number().nullable(),
+  heading: z.number().nullable(),
+  altitude: z.number().nullable(),
+  batteryLevel: z.number().nullable(),
+});
+
+// ----------------- CORS -----------------
 const corsOptions = {
   origin: [
     process.env.NEXT_PUBLIC_APP_URL,
@@ -27,77 +47,90 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.use(express.json()); // For parsing application/json payloads
+app.use(express.json());
 
-// Setup Socket.IO server
-const io = new Server(httpServer, {
-  cors: corsOptions,
-});
+// ----------------- SOCKET.IO -----------------
+const io = new Server(httpServer, { cors: corsOptions });
 
-// A simple Express route to confirm the server is running
 app.get('/', (req, res) => {
-  res.send(`
-    <html style="background-color: #121212; color: #E0E0E0; font-family: sans-serif; text-align: center; padding-top: 50px;">
-      <h1>Socket.IO server is running</h1>
-    </html>
-  `);
+  res.send(`<html style="background-color:#121212;color:#E0E0E0;font-family:sans-serif;text-align:center;padding-top:50px;">
+    <h1>Socket.IO GeoLiveTracking server is running</h1>
+  </html>`);
 });
 
-// This is where the real-time logic will live
 io.on('connection', (socket) => {
-  console.log('A client has connected with ID:', socket.id);
-  socket.on('disconnect', () => {
-    console.log('A client has disconnected');
-  });
+  console.log('A client connected:', socket.id);
+  socket.on('disconnect', () => console.log('A client disconnected'));
 });
 
-// ----------------- DATABASE AND POLLING IMPLEMENTATION ---------------------
-// Create a single database client instance for the entire application lifetime.
-const dbClient = new Client({
+// ----------------- DATABASE -----------------
+const dbPool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
 });
 
 async function fetchActiveSalesmenIds() {
   try {
-    if (!dbClient._connected) {
-      await dbClient.connect();
-    }
-    const result = await dbClient.query(`
-      SELECT "id" FROM "users" WHERE status = 'active'
+    const result = await dbPool.query(`
+      SELECT "id", "firstName", "lastName", "role", "region", "area", "salesmanLoginId"
+      FROM "users"
+      WHERE status = 'active'
     `);
-
-    // Use the actual `id` column
-    return result.rows.map(row => row.id);
+    return result.rows;
   } catch (error) {
     console.error('Error fetching active salesmen from database:', error);
     return [];
   }
 }
 
-// Start the polling process
+// ----------------- POLLING -----------------
 setInterval(async () => {
-  const activeSalesmenUserIds = await fetchActiveSalesmenIds();
-  
-  if (activeSalesmenUserIds.length > 0) {
-    try {
-      const locations = await pollRadarForLocations(activeSalesmenUserIds);
-      if (locations && locations.length > 0) {
-        locations.forEach(location => {
-          // Broadcast each location to all connected clients
-          io.emit('locationUpdate', location);
-          console.log(`Polled and broadcasted location for userId: ${location.userId}`);
-        });
-      }
-    } catch (error) {
-      console.error('Error during polling:', error);
-    }
-  } else {
+  const activeUsers = await fetchActiveSalesmenIds();
+  if (activeUsers.length === 0) {
     console.log('No active salesmen found. Polling skipped.');
+    return;
   }
-}, 10000); // Polls every 10 seconds
 
-// Start the server
+  try {
+    const userIds = activeUsers.map(u => u.id);
+    const locations = await pollRadarForLocations(userIds);
+
+    for (const loc of locations) {
+      const user = activeUsers.find(u => u.id.toString() === loc.userId.toString());
+      if (!user) continue;
+
+      try {
+        const normalized = liveLocationSchema.parse({
+          userId: user.id,
+          salesmanName: `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'N/A',
+          employeeId: user.salesmanLoginId || null,
+          role: user.role || 'executive',
+          region: user.region || null,
+          area: user.area || null,
+          latitude: loc.latitude,
+          longitude: loc.longitude,
+          recordedAt: loc.timestamp,
+          isActive: true,
+          accuracy: loc.accuracy ?? null,
+          speed: loc.speed ?? null,
+          heading: loc.heading ?? null,
+          altitude: loc.altitude ?? null,
+          batteryLevel: loc.batteryLevel ?? null,
+        });
+
+        io.emit('locationUpdate', normalized);
+        console.log(`Broadcasted live location for userId ${normalized.userId}`);
+      } catch (parseErr) {
+        console.error('Schema validation failed:', parseErr.errors);
+      }
+    }
+  } catch (error) {
+    console.error('Error during polling:', error);
+  }
+}, 10000); // every 10s
+
+// ----------------- START SERVER -----------------
 const port = process.env.PORT || 3001;
 httpServer.listen(port, () => {
-  console.log(`Express and Socket.IO server listening on port ${port}`);
+  console.log(`GeoLiveTracking server running on port ${port}`);
 });
