@@ -13,9 +13,9 @@ const httpServer = createServer(app);
 
 // ----------------- ZOD SCHEMA -----------------
 const liveLocationSchema = z.object({
-  userId: z.number(),
+  userId: z.number(),                 // DB user.id (int)
   salesmanName: z.string(),
-  employeeId: z.string().nullable(),
+  employeeId: z.string().nullable(),  // salesman_login_id
   role: z.string(),
   region: z.string().nullable(),
   area: z.string().nullable(),
@@ -64,7 +64,6 @@ io.on("connection", (socket) => {
 });
 
 // ----------------- DATABASE -----------------
-// connect to neon db to fetch all active salesmen, active = in the company != active trips/journey
 const dbPool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
@@ -99,21 +98,21 @@ setInterval(async () => {
   }
 
   try {
-    // Use salesman_login_id as external trip ID for Radar
+    // ✅ Use salesman_login_id as Radar externalId for trips
     const externalTripIds = activeUsers
       .map((u) => u.salesman_login_id)
       .filter(Boolean);
 
+    // ✅ Poll Radar (bulk request)
     const locations = await pollRadarForLocations(externalTripIds);
 
     for (const loc of locations) {
-      // Match Radar externalId back to our DB user
-      const user = activeUsers.find(
-        (u) => u.salesman_login_id === loc.userId
-      );
+      // Match Radar externalId (salesman_login_id) to DB user
+      const user = activeUsers.find((u) => u.salesman_login_id === loc.userId);
       if (!user) continue;
 
       try {
+        // ✅ Normalize and validate
         const normalized = liveLocationSchema.parse({
           userId: user.id,
           salesmanName:
@@ -134,6 +133,7 @@ setInterval(async () => {
           batteryLevel: loc.batteryLevel ?? null,
         });
 
+        // ✅ Emit via Socket.IO to admin dashboard
         io.emit("locationUpdate", normalized);
         console.log(`Broadcasted live location for userId ${normalized.userId}`);
       } catch (parseErr) {
