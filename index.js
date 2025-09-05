@@ -1,12 +1,12 @@
 // index.js (Main Express Server)
-require('dotenv').config();
-const express = require('express');
-const { createServer } = require('http');
-const { Server } = require('socket.io');
-const { Pool } = require('pg');
-const cors = require('cors');
-const { pollRadarForLocations } = require('./radar');
-const { z } = require('zod');
+require("dotenv").config();
+const express = require("express");
+const { createServer } = require("http");
+const { Server } = require("socket.io");
+const { Pool } = require("pg");
+const cors = require("cors");
+const { pollRadarForLocations } = require("./radar");
+const { z } = require("zod");
 
 const app = express();
 const httpServer = createServer(app);
@@ -37,13 +37,13 @@ const corsOptions = {
     "http://localhost:3000",
     "http://localhost:3001",
     "http://localhost:8000",
-    "http://13.201.132.230", // AWS EC2 IPV4 port
+    "http://13.201.132.230",
     "https://salesmancms-dashboard.onrender.com",
     "https://telesalesside.onrender.com",
-    "https://socketio-geolivetracking.onrender.com"
+    "https://socketio-geolivetracking.onrender.com",
   ],
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ["GET", "POST"],
+  allowedHeaders: ["Content-Type", "Authorization"],
 };
 
 app.use(cors(corsOptions));
@@ -52,24 +52,25 @@ app.use(express.json());
 // ----------------- SOCKET.IO -----------------
 const io = new Server(httpServer, { cors: corsOptions });
 
-app.get('/', (req, res) => {
+app.get("/", (req, res) => {
   res.send(`<html style="background-color:#121212;color:#E0E0E0;font-family:sans-serif;text-align:center;padding-top:50px;">
     <h1>Socket.IO GeoLiveTracking server is running</h1>
   </html>`);
 });
 
-io.on('connection', (socket) => {
-  console.log('A client connected:', socket.id);
-  socket.on('disconnect', () => console.log('A client disconnected'));
+io.on("connection", (socket) => {
+  console.log("A client connected:", socket.id);
+  socket.on("disconnect", () => console.log("A client disconnected"));
 });
 
 // ----------------- DATABASE -----------------
+// connect to neon db to fetch all active salesmen, active = in the company != active trips/journey
 const dbPool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
 
-async function fetchActiveSalesmenIds() {
+async function fetchActiveSalesmen() {
   try {
     const result = await dbPool.query(`
       SELECT id,
@@ -84,33 +85,42 @@ async function fetchActiveSalesmenIds() {
     `);
     return result.rows;
   } catch (error) {
-    console.error('Error fetching active salesmen from database:', error);
+    console.error("Error fetching active salesmen from database:", error);
     return [];
   }
 }
 
 // ----------------- POLLING -----------------
 setInterval(async () => {
-  const activeUsers = await fetchActiveSalesmenIds();
+  const activeUsers = await fetchActiveSalesmen();
   if (activeUsers.length === 0) {
-    console.log('No active salesmen found. Polling skipped.');
+    console.log("No active salesmen found. Polling skipped.");
     return;
   }
 
   try {
-    const userIds = activeUsers.map(u => u.id);
-    const locations = await pollRadarForLocations(userIds);
+    // Use salesman_login_id as external trip ID for Radar
+    const externalTripIds = activeUsers
+      .map((u) => u.salesman_login_id)
+      .filter(Boolean);
+
+    const locations = await pollRadarForLocations(externalTripIds);
 
     for (const loc of locations) {
-      const user = activeUsers.find(u => u.id.toString() === loc.userId.toString());
+      // Match Radar externalId back to our DB user
+      const user = activeUsers.find(
+        (u) => u.salesman_login_id === loc.userId
+      );
       if (!user) continue;
 
       try {
         const normalized = liveLocationSchema.parse({
           userId: user.id,
-          salesmanName: `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'N/A',
+          salesmanName:
+            `${user.first_name || ""} ${user.last_name || ""}`.trim() ||
+            "N/A",
           employeeId: user.salesman_login_id || null,
-          role: user.role || 'junior-executive',
+          role: user.role || "junior-executive",
           region: user.region || null,
           area: user.area || null,
           latitude: loc.latitude,
@@ -124,14 +134,14 @@ setInterval(async () => {
           batteryLevel: loc.batteryLevel ?? null,
         });
 
-        io.emit('locationUpdate', normalized);
+        io.emit("locationUpdate", normalized);
         console.log(`Broadcasted live location for userId ${normalized.userId}`);
       } catch (parseErr) {
-        console.error('Schema validation failed:', parseErr.errors);
+        console.error("Schema validation failed:", parseErr.errors);
       }
     }
   } catch (error) {
-    console.error('Error during polling:', error);
+    console.error("Error during polling:", error);
   }
 }, 10000); // every 10s
 
