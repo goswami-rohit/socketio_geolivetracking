@@ -3,8 +3,9 @@ require('dotenv').config();
 const express = require('express');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
+const { Client } = require('pg');
 const cors = require('cors');
-const { processRadarWebhook } = require('./radar');
+const { pollRadarForLocations } = require('./radar');
 
 const app = express();
 const httpServer = createServer(app);
@@ -33,29 +34,6 @@ const io = new Server(httpServer, {
   cors: corsOptions,
 });
 
-/**
- * API route to receive real-time location updates via a webhook from Radar.
- * This endpoint will be configured in your Radar dashboard.
- */
-app.post('/api/live-location', async (req, res) => {
-  try {
-    // Process and validate the incoming webhook payload using the radar.js file
-    const locationData = await processRadarWebhook(req);
-    if (!locationData) {
-      return res.status(400).send('Invalid webhook signature or data.');
-    }
-
-    // Broadcast the new location to all connected clients via Socket.IO
-    io.emit('locationUpdate', locationData);
-    console.log(`Location updated and broadcasted for userId: ${locationData.userId}`);
-
-    res.status(200).send('Location updated successfully.');
-  } catch (error) {
-    console.error('Error processing live location update:', error);
-    res.status(500).send('Internal Server Error.');
-  }
-});
-
 // A simple Express route to confirm the server is running
 app.get('/', (req, res) => {
   res.send(`
@@ -72,6 +50,51 @@ io.on('connection', (socket) => {
     console.log('A client has disconnected');
   });
 });
+
+// ----------------- DATABASE AND POLLING IMPLEMENTATION ---------------------
+// Create a single database client instance for the entire application lifetime.
+const dbClient = new Client({
+  connectionString: process.env.DATABASE_URL,
+});
+
+async function fetchActiveSalesmenIds() {
+  try {
+    if (!dbClient._connected) {
+      await dbClient.connect();
+    }
+    const result = await dbClient.query(`
+      SELECT "id" FROM "users" WHERE status = 'active'
+    `);
+
+    // Use the actual `id` column
+    return result.rows.map(row => row.id);
+  } catch (error) {
+    console.error('Error fetching active salesmen from database:', error);
+    return [];
+  }
+}
+
+// Start the polling process
+setInterval(async () => {
+  const activeSalesmenUserIds = await fetchActiveSalesmenIds();
+  
+  if (activeSalesmenUserIds.length > 0) {
+    try {
+      const locations = await pollRadarForLocations(activeSalesmenUserIds);
+      if (locations && locations.length > 0) {
+        locations.forEach(location => {
+          // Broadcast each location to all connected clients
+          io.emit('locationUpdate', location);
+          console.log(`Polled and broadcasted location for userId: ${location.userId}`);
+        });
+      }
+    } catch (error) {
+      console.error('Error during polling:', error);
+    }
+  } else {
+    console.log('No active salesmen found. Polling skipped.');
+  }
+}, 10000); // Polls every 10 seconds
 
 // Start the server
 const port = process.env.PORT || 3001;
