@@ -1,7 +1,7 @@
 // radar.js
 const axios = require("axios");
 
-const RADAR_SECRET_KEY = process.env.RADAR_SECRET_KEY; // Secret key must be set
+const RADAR_SECRET_KEY = process.env.RADAR_SECRET_KEY;
 
 async function pollRadarForLocations(externalTripIds) {
   if (!RADAR_SECRET_KEY) {
@@ -9,34 +9,32 @@ async function pollRadarForLocations(externalTripIds) {
     return [];
   }
 
-  const locationData = [];
-  const headers = {
-    Authorization: RADAR_SECRET_KEY,
-    "Content-Type": "application/json",
-  };
+  if (!externalTripIds || externalTripIds.length === 0) {
+    return [];
+  }
 
-  for (const tripId of externalTripIds) {
-    try {
-      // Fetch trip details by externalId
-      const response = await axios.get(
-        `https://api.radar.io/v1/trips/${encodeURIComponent(tripId)}`,
-        {
-          headers,
-          params: {
-            externalId: activeUserExternalIds.join(","), // list of your salesman_login_id or similar
-            status: "started",
-            includeLocations: true,
-          },
-        }
-      );
+  try {
+    const headers = { Authorization: RADAR_SECRET_KEY };
 
-      const trip = response.data.trip;
+    // ✅ Fetch all trips in a single request
+    const response = await axios.get("https://api.radar.io/v1/trips", {
+      headers,
+      params: {
+        externalId: externalTripIds.join(","), // comma-separated list
+        includeLocations: true,
+        status: "started", // optional filter
+      },
+    });
 
-      if (trip && trip.user && trip.user.lastLocation) {
+    const trips = response.data.trips || [];
+    const locationData = [];
+
+    for (const trip of trips) {
+      if (trip.user && trip.user.lastLocation) {
         const loc = trip.user.lastLocation;
 
         locationData.push({
-          userId: trip.user.externalId, // use externalId (your DB’s salesman_login_id, etc.)
+          userId: trip.user.externalId, // your salesman_login_id
           latitude: loc.coordinates[1],
           longitude: loc.coordinates[0],
           timestamp: loc.createdAt,
@@ -47,18 +45,19 @@ async function pollRadarForLocations(externalTripIds) {
           batteryLevel: loc.battery?.level ?? null,
         });
       }
-    } catch (error) {
-      if (error.response) {
-        console.error(
-          `Failed to poll Radar for trip ${tripId}: [${error.response.status}] ${error.response.data.message || error.response.statusText}`
-        );
-      } else {
-        console.error(`Failed to poll Radar for trip ${tripId}:`, error.message);
-      }
     }
-  }
 
-  return locationData;
+    return locationData;
+  } catch (err) {
+    if (err.response) {
+      console.error(
+        `Radar API error: [${err.response.status}] ${err.response.data.message || err.response.statusText}`
+      );
+    } else {
+      console.error("Radar request failed:", err.message);
+    }
+    return [];
+  }
 }
 
 module.exports = { pollRadarForLocations };
