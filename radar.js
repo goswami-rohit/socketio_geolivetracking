@@ -11,13 +11,13 @@ async function pollRadarForLocations(userIds) {
 
   const locationData = [];
   const headers = {
-    'Authorization': `Bearer ${RADAR_SECRET_KEY}`,
+    'Authorization': `${RADAR_SECRET_KEY}`,
     'Content-Type': 'application/json'
   };
 
   for (const userId of userIds) {
     try {
-      const response = await axios.get(`https://api.radar.io/v1/users/${userId}/location`, { headers });
+      const response = await axios.get(`https://api.radar.io/v1/trips/:id`, { headers });
       const user = response.data.user;
       if (user && user.lastLocation) {
         locationData.push({
