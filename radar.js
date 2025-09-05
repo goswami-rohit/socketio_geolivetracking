@@ -10,31 +10,37 @@ async function pollRadarForLocations(externalTripIds) {
   }
 
   if (!externalTripIds || externalTripIds.length === 0) {
+    console.log("No externalTripIds provided to pollRadarForLocations.");
     return [];
   }
 
-  try {
-    const headers = { Authorization: RADAR_SECRET_KEY };
+  const headers = {
+    Authorization: RADAR_SECRET_KEY,
+    "Content-Type": "application/json",
+  };
 
-    // ✅ Fetch all trips in a single request
+  try {
     const response = await axios.get("https://api.radar.io/v1/trips", {
       headers,
       params: {
-        externalId: externalTripIds.join(","), // comma-separated list
+        externalId: externalTripIds.join(","), // pass salesman_login_id values
         includeLocations: true,
-        status: "started", // optional filter
       },
     });
 
-    const trips = response.data.trips || [];
-    const locationData = [];
+    if (!response.data || !response.data.trips) {
+      console.log("Radar returned no trips:", response.data);
+      return [];
+    }
 
-    for (const trip of trips) {
-      if (trip.user && trip.user.lastLocation) {
-        const loc = trip.user.lastLocation;
+    const trips = response.data.trips;
 
-        locationData.push({
-          userId: trip.user.externalId, // your salesman_login_id
+    return trips
+      .filter((t) => t.user && t.user.lastLocation) // only keep trips with location
+      .map((t) => {
+        const loc = t.user.lastLocation;
+        return {
+          userId: t.externalId, // 👈 this is salesman_login_id in your DB
           latitude: loc.coordinates[1],
           longitude: loc.coordinates[0],
           timestamp: loc.createdAt,
@@ -43,19 +49,13 @@ async function pollRadarForLocations(externalTripIds) {
           heading: loc.heading ?? null,
           altitude: loc.altitude ?? null,
           batteryLevel: loc.battery?.level ?? null,
-        });
-      }
-    }
-
-    return locationData;
+        };
+      });
   } catch (err) {
-    if (err.response) {
-      console.error(
-        `Radar API error: [${err.response.status}] ${err.response.data.message || err.response.statusText}`
-      );
-    } else {
-      console.error("Radar request failed:", err.message);
-    }
+    console.error(
+      "Radar poll failed:",
+      err.response?.data || err.message
+    );
     return [];
   }
 }
